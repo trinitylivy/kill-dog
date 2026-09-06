@@ -23,9 +23,13 @@ pod created (env: KILLDOG_TTL_MIN=360)
    │     enforces: hard TTL + IDLE (heartbeat file + /queue + SSH check)
    │
    ├── L2 GHA SAFETY NET (second line, slow, survives sandbox recycle)
-   │     .github/workflows/kill-dog.yml on the DEFAULT branch
-   │     cron */20 + workflow_dispatch; public repo → free minutes
-   │     RUNPOD_API_KEY from repo secrets (never in the tree)
+   │     ACTIVE host: beulahkemp/kill-dog (public repo, working runners)
+   │       cron */20 + workflow_dispatch, RUNPOD_API_KEY repo secret
+   │     DORMANT hosts (installed; come alive when the trinitylivy
+   │       account's Actions billing lock is cleared — run annotation:
+   │       "The job was not started because your account is locked due
+   │       to a billing issue", every workflow since 2026-09-04):
+   │       trinitylivy/kill-dog + trinitylivy/comfy-templates@main
    │     enforces: hard TTL only — can never false-kill a live session
    │
    └── L3 ONE-SHOT AUDIT (session start/end / drills)
@@ -63,13 +67,33 @@ PAT comes from `--token` / `GITHUB_TOKEN` / `/home/z/bench-r3/.gh_pat`;
 RunPod key from the bench repo `.env` (see `ensure_gha_net.py`).
 **After rotating the RunPod key, re-run `--set-secret`.**
 
-## Drill (validated 2026-09-06, ~$0.2 total)
+## Drills (validated 2026-09-06, ~$0.22 total)
 
-1. GHA net: create pod with `KILLDOG_TTL_MIN=6`, no local dog, dispatch
-   the workflow after 7 min → run log shows TTL breach → TERMINATED.
-2. Local dog: create pod, spawn dog with `--idle-min 2` and a heartbeat
-   file that is never touched again → queue drains → idle-confirmed ×3 →
-   TERMINATED.
+**Drill A — GHA net TTL-kill** (pod `rs63osd5rdhv0t`, L40S SECURE, env
+`KILLDOG_TTL_MIN=6`, no local dog = "local layer died"):
+- young pod correctly spared: `age=2.4 ttl=6 … ok`
+- breach killed: `KILL rs63osd5rdhv0t: TTL breach 6.9m > 6m -> TERMINATED`
+- validates: env-at-create (REST v2 `"env"`), GraphQL env read-back,
+  dispatch → terminate chain, secret plumbing.
+
+**Drill B — local dfork idle-kill** (pod `h00cvk5enw2ofr`, L40S SECURE,
+env TTL=30 as backstop, heartbeat touched once then never = "driver died"):
+```
+10:26  ok      age=1.9 ttl=30 hb=2.0 queue=empty   (confirmations start)
+10:27  ok      age=2.9 ttl=30 hb=3.1 queue=empty
+10:28  KILL h00cvk5enw2ofr: IDLE -> TERMINATED (heartbeat stale 4.1m,
+      queue empty, downloads=unknown, confirmed 3x)   [TERMINATED]
+```
+- validates: double-fork survival across bash toolcalls (dog PID 2432,
+  PPID 1, outlived 3+ toolcalls), heartbeat staleness detection, queue
+  probe, 3-confirmation guard, terminate path.
+- vs the r3 incident: 2h idle billing → **4.2 min**. Sandbox-recycled case
+  (local dog dead) is bounded by the net's TTL instead (6h default).
+
+Note: on SECURE-cloud pods there is no public SSH port — the download
+probe reports `unknown` and the idle rule relies on heartbeat+queue alone
+(unknown never blocks a kill here because the probe is advisory; it only
+prevents kills when it sees active downloads).
 
 ## Live API facts baked into this code (2026-09-06)
 
