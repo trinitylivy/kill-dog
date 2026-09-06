@@ -109,3 +109,17 @@ prevents kills when it sees active downloads).
   `python-requests/2.31.0`.
 - ComfyUI queue probe: `https://<podId>-<privatePort>.proxy.runpod.net/queue`
   → `{"queue_running": [...], "queue_pending": [...]}`.
+
+## Open watch-item (2026-09-06): first cron firing pending
+
+The workflow's `workflow_dispatch` path is proven live (3 successful runs,
+one of them the drill-A TTL kill) but the `schedule` trigger had not yet
+self-fired ~1h after repo creation — GitHub's scheduler often lags hours
+before registering a new repo's cron (and batches/delays under load; see
+docs: "the schedule event can be delayed during periods of high load").
+Mitigations in place: 3 hosts carry the workflow (1 active-runner, 2
+dormant until the trinitylivy billing lock clears) and the local dog
+covers live sessions regardless. **If a future session finds cron still
+never fired:** re-commit the workflow file (re-registers the schedule),
+or port the sweep to the org runner per the backend repo's wave-13
+design (their `comfy-backend` org already has verified cron behavior).
