@@ -127,15 +127,21 @@ class RunPod:
 
 
 def pod_env_dict(raw):
-    """GraphQL env may be a list of {key,value} or a plain dict — normalize."""
+    """GraphQL env read-back shapes seen live: a list of 'K=V' STRINGS
+    (2026-09-06 drill), possibly a list of {key,value} dicts, or a plain
+    dict — normalize all of them."""
     if not raw:
         return {}
     if isinstance(raw, dict):
         return raw
     out = {}
-    for kv in raw:
-        if isinstance(kv, dict) and "key" in kv:
-            out[kv["key"]] = kv.get("value")
+    if isinstance(raw, list):
+        for kv in raw:
+            if isinstance(kv, dict) and "key" in kv:
+                out[kv["key"]] = kv.get("value")
+            elif isinstance(kv, str) and "=" in kv:
+                k, v = kv.split("=", 1)
+                out[k] = v
     return out
 
 
