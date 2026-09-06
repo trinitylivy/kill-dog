@@ -34,6 +34,10 @@ DESIGN RULES
   - Account-wide scope: every pod under this RunPod key is ours (bench
     account). If the backend autoscaler ever runs long-lived workers with
     this key, bake a larger KILLDOG_TTL_MIN in their create path.
+  - EXEMPT prefix: pods whose NAME starts with `keep-` (configurable via
+    --exempt-prefix / KILLDOG_EXEMPT_PREFIX) are NEVER touched by any
+    layer — the documented escape hatch for intentional long-lived pods
+    (idea folded from the backend repo's wave-13 kill-dog design).
 
 KILL RULES (per pod, running pods only)
   TTL  : age_min > ttl_min   -> terminate   [both layers]
@@ -156,6 +160,14 @@ def resolve_ttl_min(pod, default_ttl_min):
     return default_ttl_min
 
 
+def is_exempt(pod, prefix):
+    """Name-prefix escape hatch (wave-13 alignment): intentional
+    long-lived pods (e.g. 'keep-research-1') are never touched."""
+    if not prefix:
+        return False
+    return bool(pod.get("name") and str(pod["name"]).startswith(prefix))
+
+
 def queue_probe(pod):
     """Return 'empty' | 'busy' | 'unknown' by probing ComfyUI /queue via the
     RunPod proxy URL (https://<podId>-<privatePort>.proxy.runpod.net)."""
@@ -239,6 +251,13 @@ class Dog:
                 "age_min": round(uptime / 60.0, 1) if uptime is not None else None,
                 "running": uptime is not None,
             }
+            if is_exempt(pod, self.args.exempt_prefix):
+                entry["verdict"] = "exempt"
+                entry["reason"] = f"name starts with exempt prefix {self.args.exempt_prefix!r}"
+                self.idle_conf.pop(pid, None)
+                report.append(entry)
+                continue
+
             if uptime is None:
                 entry["verdict"] = "not_running_no_cost"
                 self.idle_conf.pop(pid, None)
@@ -376,6 +395,8 @@ def main():
     ap.add_argument("--heartbeat-file", default=None,
                     help="file the bench driver touches every poll; stale mtime = dead driver")
     ap.add_argument("--ssh-key", default=None, help="SSH private key to check for active downloads")
+    ap.add_argument("--exempt-prefix", default=os.environ.get("KILLDOG_EXEMPT_PREFIX", "keep-"),
+                    help="pods whose name starts with this are never killed (escape hatch)")
     args = ap.parse_args()
     if args.mode_flag:
         args.mode = args.mode_flag
