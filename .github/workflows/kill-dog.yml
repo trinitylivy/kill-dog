@@ -1,0 +1,58 @@
+# kill-dog GHA safety net — the standing fleet reaper for RunPod GPU pods.
+#
+# WHY: when the driving agent session/sandbox dies mid-GPU-test, nothing is
+# left watching the pod and it bills for hours (real incident: r3, ~2h/$1.40).
+# The LOCAL double-forked kill-dog daemon (ops/killdog/spawn_kill_dog.py) is
+# the first line, but it dies on sandbox recycle. This workflow is the net:
+# it runs on GitHub's infra, independent of any sandbox, every 20 minutes.
+#
+# It enforces HARD TTL ONLY (never the idle rule — GHA cannot see the local
+# driver heartbeat, and a false kill of a live session must be impossible).
+# Per-pod TTL comes from the KILLDOG_TTL_MIN env baked at pod creation
+# (ops/killdog/create integration); pods without it get --default-ttl-min.
+#
+# Termination is idempotent and races with the local dog are harmless.
+name: kill-dog
+
+on:
+  schedule:
+    - cron: "*/20 * * * *" # 3×/hour; public repo → free minutes
+  workflow_dispatch:
+    inputs:
+      default_ttl_min:
+        description: "TTL (minutes) for pods without KILLDOG_TTL_MIN env"
+        required: false
+        default: "240"
+      dry_run:
+        description: "report only, do not terminate"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kill-dog
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run kill-dog (TTL enforcement)
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          python kill_dog.py --mode once \
+            --default-ttl-min "${{ github.event.inputs.default_ttl_min || '240' }}" \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+      - name: Fail loudly on API errors
+        if: failure()
+        run: echo "kill-dog audit FAILED (API/auth error) — check RUNPOD_API_KEY secret and RunPod status"
